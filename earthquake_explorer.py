@@ -11,31 +11,49 @@ Run:
     python earthquake_explorer.py
 """
 
-import json
 import math
-import sys
 from datetime import datetime, timedelta, timezone
 
-import matplotlib
-matplotlib.use("Agg")          # non-interactive backend — saves PNGs without a display
+import matplotlib; matplotlib.use("Agg")  # must precede pyplot import
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 import requests
 
 # =============================================================================
-# CONFIG  ← change these two numbers to adjust the query
+# CONFIG  ← change these values to adjust the query
 # =============================================================================
 MIN_MAGNITUDE = 4.5    # only fetch quakes at or above this magnitude
 DAYS_BACK     = 365    # how many days of history to fetch
+
+# --- Geographic bounding box (TODO 1) ----------------------------------------
+# Set REGION_NAME to a short label (used in titles and filenames).
+# Set the four lat/lon bounds to restrict the query to one area.
+# Leave all five as None to query the whole world (the default).
+#
+# Example — Japan:
+#   REGION_NAME = "Japan"
+#   MIN_LAT, MAX_LAT =  30.0,  46.0
+#   MIN_LON, MAX_LON = 129.0, 146.0
+#
+# Example — California:
+#   REGION_NAME = "California"
+#   MIN_LAT, MAX_LAT =  32.0,  42.0
+#   MIN_LON, MAX_LON = -124.5, -114.0
+REGION_NAME = None
+MIN_LAT = None
+MAX_LAT = None
+MIN_LON = None
+MAX_LON = None
 
 
 # =============================================================================
 # SECTION 1 – BUILD THE API URL AND DOWNLOAD DATA
 # =============================================================================
 
-def fetch_earthquakes(min_mag: float, days_back: int) -> dict:
+def fetch_earthquakes(min_mag: float, days_back: int,
+                      min_lat=None, max_lat=None,
+                      min_lon=None, max_lon=None) -> dict:
     """
     Ask the USGS FDSN event API for earthquakes and return the raw GeoJSON dict.
 
@@ -63,10 +81,22 @@ def fetch_earthquakes(min_mag: float, days_back: int) -> dict:
         "orderby":     "time",        # newest first
     }
 
+    # Add bounding-box params only when the caller supplied them.
+    # The USGS API ignores params that aren't present, so None values
+    # must be filtered out rather than passed as the string "None".
+    bbox = {
+        "minlatitude":  min_lat,
+        "maxlatitude":  max_lat,
+        "minlongitude": min_lon,
+        "maxlongitude": max_lon,
+    }
+    params.update({k: v for k, v in bbox.items() if v is not None})
+
     base_url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 
-    print(f"[1/4] Fetching M{min_mag}+ earthquakes from {start_time.date()} to "
-          f"{end_time.date()} …", flush=True)
+    region_label = REGION_NAME or "worldwide"
+    print(f"[1/4] Fetching M{min_mag}+ earthquakes ({region_label}) from "
+          f"{start_time.date()} to {end_time.date()} …", flush=True)
 
     # requests.get() sends an HTTP GET request; raise_for_status() turns
     # non-200 responses into Python exceptions so we hear about failures.
@@ -159,9 +189,17 @@ def plot_world_map(df: pd.DataFrame, filename: str = "map_epicenters.png") -> No
     """
     fig, ax = plt.subplots(figsize=(14, 7))
 
-    # Draw a simple rectangle to represent the globe outline
-    ax.set_xlim(-180, 180)
-    ax.set_ylim(-90, 90)
+    # Zoom to the bounding box if one is configured, otherwise show the full globe.
+    # Add 2° of padding so epicenters near the edge aren't clipped.
+    pad = 2
+    ax.set_xlim(
+        (MIN_LON - pad) if MIN_LON is not None else -180,
+        (MAX_LON + pad) if MAX_LON is not None else  180,
+    )
+    ax.set_ylim(
+        (MIN_LAT - pad) if MIN_LAT is not None else -90,
+        (MAX_LAT + pad) if MAX_LAT is not None else  90,
+    )
     ax.set_facecolor("#c8e6f5")   # light blue = ocean
 
     # Scale marker sizes: area proportional to magnitude^3 keeps big quakes visible
@@ -186,8 +224,9 @@ def plot_world_map(df: pd.DataFrame, filename: str = "map_epicenters.png") -> No
 
     ax.set_xlabel("Longitude", fontsize=11)
     ax.set_ylabel("Latitude", fontsize=11)
+    region_label = f" — {REGION_NAME}" if REGION_NAME else ""
     ax.set_title(
-        f"M{MIN_MAGNITUDE}+ Earthquake Epicenters — Last {DAYS_BACK} Days\n"
+        f"M{MIN_MAGNITUDE}+ Earthquake Epicenters{region_label} — Last {DAYS_BACK} Days\n"
         f"({len(df):,} events)  |  Colour = depth, Size ∝ magnitude",
         fontsize=13,
     )
@@ -246,8 +285,9 @@ def plot_gutenberg_richter(
 
     ax.set_xlabel("Magnitude (M)", fontsize=12)
     ax.set_ylabel("log₁₀ N(≥M)", fontsize=12)
+    region_label = f" — {REGION_NAME}" if REGION_NAME else ""
     ax.set_title(
-        f"Gutenberg-Richter Plot — Last {DAYS_BACK} Days (M ≥ {MIN_MAGNITUDE})",
+        f"Gutenberg-Richter Plot{region_label} — Last {DAYS_BACK} Days (M ≥ {MIN_MAGNITUDE})",
         fontsize=13,
     )
     ax.legend(fontsize=11)
@@ -290,8 +330,9 @@ def plot_depth_histogram(
 
     ax.set_xlabel("Depth (km)", fontsize=12)
     ax.set_ylabel("Number of Earthquakes", fontsize=12)
+    region_label = f" — {REGION_NAME}" if REGION_NAME else ""
     ax.set_title(
-        f"Earthquake Depth Distribution — Last {DAYS_BACK} Days (M ≥ {MIN_MAGNITUDE})",
+        f"Earthquake Depth Distribution{region_label} — Last {DAYS_BACK} Days (M ≥ {MIN_MAGNITUDE})",
         fontsize=13,
     )
     ax.legend(fontsize=10)
@@ -309,7 +350,11 @@ def plot_depth_histogram(
 
 def main():
     # --- fetch ---
-    geojson = fetch_earthquakes(MIN_MAGNITUDE, DAYS_BACK)
+    geojson = fetch_earthquakes(
+        MIN_MAGNITUDE, DAYS_BACK,
+        min_lat=MIN_LAT, max_lat=MAX_LAT,
+        min_lon=MIN_LON, max_lon=MAX_LON,
+    )
 
     # --- parse ---
     df = parse_to_dataframe(geojson)
@@ -318,10 +363,12 @@ def main():
     print_largest_event(df)
 
     # --- plots ---
+    # Build a filename prefix so region runs don't overwrite the global PNGs.
+    prefix = f"{REGION_NAME.lower().replace(' ', '_')}_" if REGION_NAME else ""
     print("[4/4] Generating plots …", flush=True)
-    plot_world_map(df)
-    plot_gutenberg_richter(df)
-    plot_depth_histogram(df)
+    plot_world_map(df,            filename=f"{prefix}map_epicenters.png")
+    plot_gutenberg_richter(df,    filename=f"{prefix}gutenberg_richter.png")
+    plot_depth_histogram(df,      filename=f"{prefix}depth_histogram.png")
 
     print("\nDone!  Three PNG files saved in the current directory.")
 
@@ -334,10 +381,8 @@ if __name__ == "__main__":
 # TODOs – ideas for extending this project
 # =============================================================================
 
-# TODO 1 – Filter to a geographic bounding box
-#   Add config variables MIN_LAT, MAX_LAT, MIN_LON, MAX_LON and pass them to
-#   the API as minlatitude / maxlatitude / minlongitude / maxlongitude params.
-#   Then re-run the map and GR plot just for that region (e.g. Japan, California).
+# DONE 1 – Geographic bounding box filter
+#   Set REGION_NAME / MIN_LAT / MAX_LAT / MIN_LON / MAX_LON in the CONFIG block.
 
 # TODO 2 – Compare b-values between two regions
 #   Define two bounding boxes (e.g. Japan vs. the Andes), fetch each separately,
