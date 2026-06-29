@@ -11,11 +11,15 @@ Run:
     python earthquake_explorer.py
 """
 
+import json
 import math
+import os
 from datetime import datetime, timedelta, timezone
 
 import matplotlib; matplotlib.use("Agg")  # must precede pyplot import
 import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Polygon as MplPolygon
 import numpy as np
 import pandas as pd
 import requests
@@ -25,6 +29,12 @@ import requests
 # =============================================================================
 MIN_MAGNITUDE = 4.5    # only fetch quakes at or above this magnitude
 DAYS_BACK     = 365    # how many days of history to fetch
+
+# --- World map background -----------------------------------------------------
+# GeoJSON country boundaries from Natural Earth (110 m resolution, public domain).
+# Downloaded once and cached locally so re-runs are instant.
+WORLD_MAP_URL   = "https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson"
+WORLD_MAP_CACHE = "countries.geojson"   # written next to the script on first run
 
 # --- Geographic bounding box (TODO 1) ----------------------------------------
 # Set REGION_NAME to a short label (used in titles and filenames).
@@ -180,6 +190,54 @@ def print_largest_event(df: pd.DataFrame) -> None:
 # SECTION 4 – PLOTS
 # =============================================================================
 
+def _load_world_geojson() -> dict:
+    """
+    Return Natural Earth country boundaries as a GeoJSON dict.
+
+    On the first call the file is downloaded from WORLD_MAP_URL and saved to
+    WORLD_MAP_CACHE.  Every subsequent call reads from that local file so the
+    script works offline and doesn't re-fetch on every run.
+    """
+    if os.path.exists(WORLD_MAP_CACHE):
+        with open(WORLD_MAP_CACHE) as f:
+            return json.load(f)
+
+    print("    downloading world boundaries (cached for future runs) …", flush=True)
+    resp = requests.get(WORLD_MAP_URL, timeout=30)
+    resp.raise_for_status()
+    with open(WORLD_MAP_CACHE, "w") as f:
+        f.write(resp.text)
+    return resp.json()
+
+
+def _world_patches(geojson: dict) -> list:
+    """
+    Convert a GeoJSON FeatureCollection of country polygons into a list of
+    matplotlib Polygon patches, one patch per polygon ring.
+
+    GeoJSON geometry types we handle:
+      Polygon      → coordinates = [ outer_ring, hole1, hole2, ... ]
+      MultiPolygon → coordinates = [ [outer, holes…], [outer, holes…], … ]
+
+    We only draw the outer ring of each polygon (holes are small islands cut
+    from large landmasses and aren't visible at this resolution).
+    """
+    patches = []
+    for feature in geojson["features"]:
+        geom = feature["geometry"]
+        # Normalise to a list of polygon-coord-groups regardless of geometry type
+        if geom["type"] == "Polygon":
+            polygon_list = [geom["coordinates"]]
+        else:  # MultiPolygon
+            polygon_list = geom["coordinates"]
+
+        for poly in polygon_list:
+            # poly[0] is the outer ring; poly[1:] are holes — we skip holes
+            exterior = np.array(poly[0])
+            patches.append(MplPolygon(exterior, closed=True))
+    return patches
+
+
 def plot_world_map(df: pd.DataFrame, filename: str = "map_epicenters.png") -> None:
     """
     Scatter plot of earthquake epicenters on a lon/lat grid.
@@ -201,6 +259,18 @@ def plot_world_map(df: pd.DataFrame, filename: str = "map_epicenters.png") -> No
         (MAX_LAT + pad) if MAX_LAT is not None else  90,
     )
     ax.set_facecolor("#c8e6f5")   # light blue = ocean
+
+    # Draw land polygons as a single PatchCollection (much faster than one-by-one).
+    # facecolor = parchment tan for land; edgecolor = thin grey country borders.
+    world_geojson = _load_world_geojson()
+    land = PatchCollection(
+        _world_patches(world_geojson),
+        facecolor="#e8dfc8",
+        edgecolor="#999999",
+        linewidth=0.3,
+        zorder=1,   # behind the earthquake scatter (zorder=2 default for scatter)
+    )
+    ax.add_collection(land)
 
     # Scale marker sizes: area proportional to magnitude^3 keeps big quakes visible
     # np.clip prevents very small or negative magnitudes from causing issues
