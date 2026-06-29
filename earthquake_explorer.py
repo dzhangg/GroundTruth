@@ -415,6 +415,68 @@ def plot_depth_histogram(
 
 
 # =============================================================================
+# SECTION 5 – INTERACTIVE GEOJSON (GitHub / Azure Maps viewer)
+# =============================================================================
+
+def save_geojson(df: pd.DataFrame, filename: str = "earthquakes.geojson") -> None:
+    """
+    Write the DataFrame to a GeoJSON FeatureCollection file.
+
+    GitHub automatically renders .geojson files as an interactive map using
+    Azure Maps (OSM tiles + Leaflet).  Each earthquake becomes a clickable
+    point whose popup shows magnitude, place, depth, and date.
+
+    GeoJSON Point coordinates must be [longitude, latitude] — depth is carried
+    in 'properties' rather than as a third coordinate so GitHub renders it
+    correctly.
+
+    We also add a 'marker-color' property using the standard GeoJSON Simple
+    Style spec that GitHub's renderer understands:
+      shallow  < 70 km  → yellow  #f5c518
+      intermediate 70–300 km → orange #f07800
+      deep    > 300 km  → purple  #8b00d4
+    """
+    def depth_color(depth_km: float) -> str:
+        if depth_km < 70:
+            return "#f5c518"
+        if depth_km < 300:
+            return "#f07800"
+        return "#8b00d4"
+
+    def mag_symbol_size(mag: float) -> str:
+        # GitHub Simple Style supports "small", "medium", "large"
+        if mag < 5.5:
+            return "small"
+        if mag < 7.0:
+            return "medium"
+        return "large"
+
+    features = []
+    for _, row in df.iterrows():
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type":        "Point",
+                "coordinates": [row["longitude"], row["latitude"]],
+            },
+            "properties": {
+                # Data fields shown in the popup
+                "magnitude": row["magnitude"],
+                "place":     row["place"],
+                "depth_km":  round(row["depth_km"], 1),
+                "date":      row["time"].strftime("%Y-%m-%d"),
+                # GitHub Simple Style fields — control dot colour and size
+                "marker-color": depth_color(row["depth_km"]),
+                "marker-size":  mag_symbol_size(row["magnitude"]),
+            },
+        })
+
+    with open(filename, "w") as f:
+        json.dump({"type": "FeatureCollection", "features": features}, f)
+    print(f"    saved → {filename}  ({len(features):,} features)")
+
+
+# =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================
 
@@ -440,7 +502,10 @@ def main():
     plot_gutenberg_richter(df,    filename=f"{prefix}gutenberg_richter.png")
     plot_depth_histogram(df,      filename=f"{prefix}depth_histogram.png")
 
-    print("\nDone!  Three PNG files saved in the current directory.")
+    # --- interactive GeoJSON ---
+    save_geojson(df, filename=f"{prefix}earthquakes.geojson")
+
+    print("\nDone!  Push earthquakes.geojson to GitHub to view the interactive map.")
 
 
 if __name__ == "__main__":
