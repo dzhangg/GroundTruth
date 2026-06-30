@@ -482,11 +482,14 @@ def save_geojson(df: pd.DataFrame, filename: str = "earthquakes.geojson") -> Non
                 "coordinates": [lon, lat],
             },
             "properties": {
-                # 'title' = popup header; 'description' = popup body (HTML)
+                # 'title' and 'description' used by GitHub's native viewer
                 "title":        place,
                 "description":  desc,
+                # Explicit fields used by index.html (Leaflet)
                 "magnitude":    mag,
                 "depth_km":     round(depth, 1),
+                "date":         row["time"].strftime("%Y-%m-%d %H:%M UTC"),
+                "url":          url,
                 # GitHub Simple Style — colour and size
                 "marker-color": mag_color(mag),
                 "marker-size":  mag_symbol_size(mag),
