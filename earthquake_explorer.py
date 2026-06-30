@@ -16,7 +16,8 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 
-import matplotlib; matplotlib.use("Agg")  # must precede pyplot import
+import matplotlib
+matplotlib.use("Agg")  # must precede pyplot import
 import matplotlib.pyplot as plt
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Polygon as MplPolygon
@@ -148,6 +149,8 @@ def parse_to_dataframe(geojson: dict) -> pd.DataFrame:
             "longitude": coords[0],
             "latitude":  coords[1],
             "depth_km":  coords[2],
+            "usgs_id":   feature.get("id", ""),
+            "url":       props.get("url", ""),
         })
 
     df = pd.DataFrame(rows)
@@ -423,57 +426,100 @@ def save_geojson(df: pd.DataFrame, filename: str = "earthquakes.geojson") -> Non
     Write the DataFrame to a GeoJSON FeatureCollection file.
 
     GitHub automatically renders .geojson files as an interactive map using
-    Azure Maps (OSM tiles + Leaflet).  Each earthquake becomes a clickable
-    point whose popup shows magnitude, place, depth, and date.
+    Azure Maps (OSM tiles).  Clicking any dot opens a popup built from the
+    'title' and 'description' properties (HTML is supported).
 
-    GeoJSON Point coordinates must be [longitude, latitude] — depth is carried
-    in 'properties' rather than as a third coordinate so GitHub renders it
-    correctly.
+    Colors follow magnitude (intensity), matching the USGS hazard palette:
+      M < 5.0   → green    #00b300  minor
+      M 5.0–5.5 → lime     #80cc00  light
+      M 5.5–6.0 → yellow   #ffcc00  moderate
+      M 6.0–6.5 → orange   #ff8000  strong
+      M 6.5–7.0 → red      #ff0000  major
+      M ≥ 7.0   → dark red #990000  great
 
-    We also add a 'marker-color' property using the standard GeoJSON Simple
-    Style spec that GitHub's renderer understands:
-      shallow  < 70 km  → yellow  #f5c518
-      intermediate 70–300 km → orange #f07800
-      deep    > 300 km  → purple  #8b00d4
+    A single "Legend" marker is appended at the end so viewers can decode
+    the colour scale without leaving the map.
     """
-    def depth_color(depth_km: float) -> str:
-        if depth_km < 70:
-            return "#f5c518"
-        if depth_km < 300:
-            return "#f07800"
-        return "#8b00d4"
+    def mag_color(mag: float) -> str:
+        if mag < 5.0:  return "#00b300"
+        if mag < 5.5:  return "#80cc00"
+        if mag < 6.0:  return "#ffcc00"
+        if mag < 6.5:  return "#ff8000"
+        if mag < 7.0:  return "#ff0000"
+        return "#990000"
 
     def mag_symbol_size(mag: float) -> str:
-        # GitHub Simple Style supports "small", "medium", "large"
-        if mag < 5.5:
-            return "small"
-        if mag < 7.0:
-            return "medium"
+        if mag < 5.5:  return "small"
+        if mag < 7.0:  return "medium"
         return "large"
 
     features = []
     for _, row in df.iterrows():
+        mag   = row["magnitude"]
+        depth = row["depth_km"]
+        lat   = row["latitude"]
+        lon   = row["longitude"]
+        place = row["place"]
+        date  = row["time"].strftime("%Y-%m-%d %H:%M UTC")
+        url   = row.get("url", "")
+
+        lat_dir = "N" if lat >= 0 else "S"
+        lon_dir = "E" if lon >= 0 else "W"
+
+        # 'description' is rendered as HTML inside the GitHub popup
+        desc = (
+            f"<strong>M{mag:.1f}</strong> — depth {depth:.0f} km<br>"
+            f"{date}<br>"
+            f"{abs(lat):.3f}°{lat_dir}, {abs(lon):.3f}°{lon_dir}<br>"
+        )
+        if url:
+            desc += f'<a href="{url}">&#8594; View on USGS</a>'
+
         features.append({
             "type": "Feature",
             "geometry": {
                 "type":        "Point",
-                "coordinates": [row["longitude"], row["latitude"]],
+                "coordinates": [lon, lat],
             },
             "properties": {
-                # Data fields shown in the popup
-                "magnitude": row["magnitude"],
-                "place":     row["place"],
-                "depth_km":  round(row["depth_km"], 1),
-                "date":      row["time"].strftime("%Y-%m-%d"),
-                # GitHub Simple Style fields — control dot colour and size
-                "marker-color": depth_color(row["depth_km"]),
-                "marker-size":  mag_symbol_size(row["magnitude"]),
+                # 'title' = popup header; 'description' = popup body (HTML)
+                "title":        place,
+                "description":  desc,
+                "magnitude":    mag,
+                "depth_km":     round(depth, 1),
+                # GitHub Simple Style — colour and size
+                "marker-color": mag_color(mag),
+                "marker-size":  mag_symbol_size(mag),
             },
         })
 
+    # Legend point — placed in the South Pacific (open ocean, always on screen
+    # for a global view).  Click it to see the full colour key.
+    legend_desc = (
+        "<strong>Magnitude colour key</strong><br>"
+        '<span style="color:#00b300">&#9679;</span> M &lt; 5.0 &nbsp; Minor<br>'
+        '<span style="color:#80cc00">&#9679;</span> M 5.0–5.5 &nbsp; Light<br>'
+        '<span style="color:#ffcc00">&#9679;</span> M 5.5–6.0 &nbsp; Moderate<br>'
+        '<span style="color:#ff8000">&#9679;</span> M 6.0–6.5 &nbsp; Strong<br>'
+        '<span style="color:#ff0000">&#9679;</span> M 6.5–7.0 &nbsp; Major<br>'
+        '<span style="color:#990000">&#9679;</span> M ≥ 7.0 &nbsp;&nbsp;&nbsp; Great<br>'
+        "<br><em>Dot size also grows with magnitude</em>"
+    )
+    features.append({
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [-165.0, -55.0]},
+        "properties": {
+            "title":         "Legend",
+            "description":   legend_desc,
+            "marker-symbol": "information",
+            "marker-color":  "#555555",
+            "marker-size":   "medium",
+        },
+    })
+
     with open(filename, "w") as f:
         json.dump({"type": "FeatureCollection", "features": features}, f)
-    print(f"    saved → {filename}  ({len(features):,} features)")
+    print(f"    saved → {filename}  ({len(features)-1:,} earthquakes + 1 legend)")
 
 
 # =============================================================================
