@@ -102,4 +102,6 @@ Earthquake data from the [USGS Earthquake Hazards Program](https://earthquake.us
 - [ ] Depth gradient across a subduction zone (Benioff zone)
 - [ ] Date-stamped output filenames for tracking change over time
 
+## License
 
+Released under the [MIT License](LICENSE).
