@@ -430,6 +430,120 @@ def plot_depth_histogram(
     print(f"    saved → {filename}")
 
 
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lon points."""
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def plot_aftershock_series(
+    df: pd.DataFrame,
+    radius_km: float = 200.0,
+    days_after: int = 90,
+    filename: str = "aftershock_series.png",
+) -> None:
+    """
+    Find the largest event in df, collect aftershocks within radius_km and
+    days_after of it, then produce a two-panel figure:
+
+      Top    — magnitude vs. time scatter (colour = depth)
+      Bottom — daily aftershock rate bar chart with Omori–Utsu decay fit
+
+    Omori–Utsu law:  n(t) = K / (c + t)^p
+      p ≈ 1   typical; higher p → faster decay
+      c       small offset that prevents a singularity at t = 0 (fixed at 0.1 day)
+      K       productivity constant
+    Fit is obtained by log-linear regression on log(n) vs. log(c + t).
+    """
+    # Identify mainshock
+    idx   = df["magnitude"].idxmax()
+    ms    = df.loc[idx]
+    ms_lat, ms_lon = ms["latitude"], ms["longitude"]
+    ms_time = ms["time"]
+    ms_mag  = ms["magnitude"]
+    ms_place = ms["place"]
+
+    # Filter: events after the mainshock, within radius_km, within days_after days
+    cutoff = ms_time + timedelta(days=days_after)
+    after  = df[(df["time"] > ms_time) & (df["time"] <= cutoff)].copy()
+    after["dist_km"] = after.apply(
+        lambda r: _haversine(ms_lat, ms_lon, r["latitude"], r["longitude"]), axis=1
+    )
+    after = after[after["dist_km"] <= radius_km].copy()
+
+    if len(after) < 5:
+        print(
+            f"    Only {len(after)} aftershock(s) found within {radius_km} km of "
+            f"M{ms_mag:.1f} mainshock — skipping aftershock plot"
+        )
+        return
+
+    after["days_after"] = (after["time"] - ms_time).dt.total_seconds() / 86400.0
+
+    # Daily rate for Omori–Utsu fit
+    day_edges  = np.arange(0, days_after + 1, 1)
+    day_ctrs   = day_edges[:-1] + 0.5
+    daily_cnt, _ = np.histogram(after["days_after"], bins=day_edges)
+
+    valid = daily_cnt > 0
+    c = 0.1  # fixed offset (days)
+    log_n = np.log(daily_cnt[valid].astype(float))
+    log_t = np.log(day_ctrs[valid] + c)
+    coeffs  = np.polyfit(log_t, log_n, 1)
+    p_val   = -coeffs[0]
+    K_val   = math.exp(coeffs[1])
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(11, 8), gridspec_kw={"height_ratios": [2, 1]}
+    )
+
+    # — top: scatter of individual aftershocks —
+    sc = ax1.scatter(
+        after["days_after"], after["magnitude"],
+        c=after["depth_km"], cmap="plasma_r",
+        s=(np.clip(after["magnitude"], 4, 9) ** 2) * 2,
+        alpha=0.65, linewidths=0, vmin=0, vmax=300,
+    )
+    cbar = plt.colorbar(sc, ax=ax1, fraction=0.02, pad=0.02)
+    cbar.set_label("Depth (km)", fontsize=10)
+
+    ax1.axhline(ms_mag, color="crimson", linestyle="--", linewidth=1.4,
+                label=f"Mainshock M{ms_mag:.1f}")
+    ax1.set_ylabel("Magnitude", fontsize=11)
+    ax1.set_title(
+        f"Aftershock Sequence — M{ms_mag:.1f} at {ms_place}\n"
+        f"({len(after):,} aftershocks within {radius_km:.0f} km over {days_after} days)",
+        fontsize=13,
+    )
+    ax1.legend(fontsize=10)
+    ax1.grid(True, linestyle="--", alpha=0.4)
+    ax1.set_xlim(0, days_after)
+
+    # — bottom: daily rate + Omori–Utsu —
+    ax2.bar(day_ctrs, daily_cnt, width=0.9, color="steelblue",
+            alpha=0.65, label="Daily aftershock count")
+
+    t_fit = np.linspace(0.1, days_after, 500)
+    n_fit = K_val / (c + t_fit) ** p_val
+    ax2.plot(t_fit, n_fit, color="tomato", linewidth=2,
+             label=f"Omori–Utsu fit  (p = {p_val:.2f},  K = {K_val:.1f})")
+
+    ax2.set_xlabel("Days after mainshock", fontsize=11)
+    ax2.set_ylabel("Aftershocks / day", fontsize=11)
+    ax2.set_xlim(0, days_after)
+    ax2.legend(fontsize=10)
+    ax2.grid(True, linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=150)
+    plt.close(fig)
+    print(f"    saved → {filename}")
+
+
 def plot_gr_comparison(
     df_a: pd.DataFrame, label_a: str,
     df_b: pd.DataFrame, label_b: str,
@@ -629,6 +743,9 @@ def main():
     # --- interactive GeoJSON ---
     save_geojson(df, filename=f"{prefix}earthquakes.geojson")
 
+    # --- aftershock time series (TODO 3) ---
+    plot_aftershock_series(df, filename=f"{prefix}aftershock_series.png")
+
     # --- b-value comparison (TODO 2) ---
     if COMPARE_REGIONS is not None:
         r_a, r_b = COMPARE_REGIONS
@@ -673,8 +790,7 @@ if __name__ == "__main__":
 #   The script fetches each region separately and overlays both GR fits on
 #   gr_comparison.png.  A lower b-value means relatively more large quakes.
 
-# TODO 3 – Aftershock time series
-#   After a big mainshock, filter the DataFrame to quakes within ~200 km of the
-#   epicentre and within 90 days after.  Plot magnitude vs. time as a scatter
-#   plot.  Overlay the Omori–Utsu decay law  n(t) = K / (c + t)^p  fitted to
-#   the aftershock rate — this describes how quickly aftershocks die off.
+# DONE 3 – Aftershock time series
+#   Finds the largest event, collects aftershocks within 200 km / 90 days,
+#   plots magnitude vs. time, and overlays an Omori–Utsu decay fit on the
+#   daily rate — saved to aftershock_series.png.
