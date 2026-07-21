@@ -57,6 +57,19 @@ MAX_LAT = None
 MIN_LON = None
 MAX_LON = None
 
+# --- b-value comparison (TODO 2) ---------------------------------------------
+# Two regions to compare on a single Gutenberg-Richter plot.
+# Each dict needs: name, min_lat, max_lat, min_lon, max_lon.
+# Set COMPARE_REGIONS = None to skip this plot entirely.
+#
+# Good contrasting pairs to try:
+#   Japan (subduction, high stress) vs. Iceland (spreading ridge, low stress)
+#   Cascadia vs. the Andes
+COMPARE_REGIONS = [
+    {"name": "Japan",         "min_lat":  30, "max_lat":  46, "min_lon": 129, "max_lon": 146},
+    {"name": "South America", "min_lat": -55, "max_lat":  15, "min_lon": -82, "max_lon": -34},
+]
+
 
 # =============================================================================
 # SECTION 1 – BUILD THE API URL AND DOWNLOAD DATA
@@ -417,6 +430,68 @@ def plot_depth_histogram(
     print(f"    saved → {filename}")
 
 
+def plot_gr_comparison(
+    df_a: pd.DataFrame, label_a: str,
+    df_b: pd.DataFrame, label_b: str,
+    filename: str = "gr_comparison.png",
+) -> None:
+    """
+    Overlay the Gutenberg-Richter fits for two regions on one plot.
+
+    The b-value (slope of the log10-count vs. magnitude line) reveals how a
+    region's seismicity is distributed across magnitudes:
+      b ≈ 1.0  global average
+      b > 1.0  more small quakes relative to large ones (e.g. volcanic, spreading)
+      b < 1.0  relatively more large quakes (e.g. locked subduction zones)
+
+    A lower b-value doesn't mean a region is "more dangerous" by itself, but it
+    does mean large events make up a bigger share of the total seismic activity.
+    """
+    fig, ax = plt.subplots(figsize=(9, 6))
+
+    palette = [("steelblue", "o"), ("tomato", "s")]   # colour + marker shape
+
+    for (df, label), (color, marker) in zip(
+        [(df_a, label_a), (df_b, label_b)], palette
+    ):
+        m_min = math.floor(df["magnitude"].min() * 10) / 10
+        m_max = math.ceil( df["magnitude"].max() * 10) / 10
+        magnitudes = np.arange(m_min, m_max + 0.1, 0.1)
+
+        counts = np.array(
+            [(df["magnitude"] >= m).sum() for m in magnitudes], dtype=float
+        )
+        valid        = counts > 0
+        mag_valid    = magnitudes[valid]
+        log10_count  = np.log10(counts[valid])
+
+        coeffs  = np.polyfit(mag_valid, log10_count, 1)
+        b_value = -coeffs[0]
+
+        fit_x = np.linspace(mag_valid.min(), mag_valid.max(), 200)
+        fit_y = np.polyval(coeffs, fit_x)
+
+        ax.scatter(mag_valid, log10_count,
+                   color=color, marker=marker, s=30, alpha=0.7, zorder=3)
+        ax.plot(fit_x, fit_y, color=color, linewidth=2,
+                label=f"{label}  —  b = {b_value:.2f}  (n = {len(df):,})")
+
+    ax.set_xlabel("Magnitude (M)", fontsize=12)
+    ax.set_ylabel("log₁₀ N(≥M)", fontsize=12)
+    ax.set_title(
+        f"Gutenberg-Richter Comparison — Last {DAYS_BACK} Days (M ≥ {MIN_MAGNITUDE})\n"
+        "Lower b-value → relatively more large quakes",
+        fontsize=13,
+    )
+    ax.legend(fontsize=11)
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=150)
+    plt.close(fig)
+    print(f"    saved → {filename}")
+
+
 # =============================================================================
 # SECTION 5 – INTERACTIVE GEOJSON (GitHub / Azure Maps viewer)
 # =============================================================================
@@ -554,6 +629,31 @@ def main():
     # --- interactive GeoJSON ---
     save_geojson(df, filename=f"{prefix}earthquakes.geojson")
 
+    # --- b-value comparison (TODO 2) ---
+    if COMPARE_REGIONS is not None:
+        r_a, r_b = COMPARE_REGIONS
+        print("[5/5] Comparing b-values …", flush=True)
+
+        geo_a = fetch_earthquakes(
+            MIN_MAGNITUDE, DAYS_BACK,
+            min_lat=r_a["min_lat"], max_lat=r_a["max_lat"],
+            min_lon=r_a["min_lon"], max_lon=r_a["max_lon"],
+        )
+        df_a = parse_to_dataframe(geo_a)
+
+        geo_b = fetch_earthquakes(
+            MIN_MAGNITUDE, DAYS_BACK,
+            min_lat=r_b["min_lat"], max_lat=r_b["max_lat"],
+            min_lon=r_b["min_lon"], max_lon=r_b["max_lon"],
+        )
+        df_b = parse_to_dataframe(geo_b)
+
+        plot_gr_comparison(
+            df_a, r_a["name"],
+            df_b, r_b["name"],
+            filename=f"{prefix}gr_comparison.png",
+        )
+
     print("\nDone!  Push earthquakes.geojson to GitHub to view the interactive map.")
 
 
@@ -568,10 +668,10 @@ if __name__ == "__main__":
 # DONE 1 – Geographic bounding box filter
 #   Set REGION_NAME / MIN_LAT / MAX_LAT / MIN_LON / MAX_LON in the CONFIG block.
 
-# TODO 2 – Compare b-values between two regions
-#   Define two bounding boxes (e.g. Japan vs. the Andes), fetch each separately,
-#   fit a GR line to each, and overlay both on the same plot.  A lower b-value
-#   suggests a region with more large quakes relative to small ones.
+# DONE 2 – Compare b-values between two regions
+#   Set COMPARE_REGIONS in the CONFIG block to a list of two region dicts.
+#   The script fetches each region separately and overlays both GR fits on
+#   gr_comparison.png.  A lower b-value means relatively more large quakes.
 
 # TODO 3 – Aftershock time series
 #   After a big mainshock, filter the DataFrame to quakes within ~200 km of the
