@@ -92,7 +92,7 @@ COMPARE_REGIONS = [
 
 Python, requests, pandas, NumPy, matplotlib, Leaflet.js.
 
-Earthquake data from the [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/fdsnws/event/1/). Country boundaries from [Natural Earth](https://www.naturalearthdata.com/) (public domain).
+Earthquake data from the [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/fdsnws/event/1/). Country boundaries from [Natural Earth](https://www.naturalearthdata.com/).
 
 ## Roadmap
 
