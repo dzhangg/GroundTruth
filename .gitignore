@@ -2,4 +2,5 @@ venv/
 .venv/
 __pycache__/
 *.png
+*gr_stats.json
 snapshots/

@@ -32,6 +32,22 @@ import requests
 MIN_MAGNITUDE = 4.5    # only fetch quakes at or above this magnitude
 DAYS_BACK     = 365    # how many days of history to fetch
 
+# --- Gutenberg-Richter fit method -----------------------------------------------
+# "mle" uses the Aki-Utsu maximum-likelihood b-value estimator (recommended —
+# unlike the OLS fit it doesn't require binning the data, isn't skewed by
+# how the tail is binned, and has a known standard error). "ols" keeps the
+# original least-squares fit on the cumulative log-count curve for comparison.
+FIT_METHOD = "mle"   # "mle" | "ols"
+
+# --- Magnitude-type filter -------------------------------------------------------
+# The FDSN catalog mixes magnitude scales (Mww, Mb, Ml, Md, ...) computed by
+# different methods; fitting one b-value across mixed scales biases the
+# result. Only events whose magType is in this list are used for the
+# Gutenberg-Richter fit — everything else is still fetched and used by the
+# other plots (map, depth histogram, aftershock series, Benioff plot).
+# Set MAG_TYPES = None to disable the filter and use every event.
+MAG_TYPES = ("mww", "mwc", "mwb", "mwr", "mw")   # moment-magnitude family
+
 # --- World map background -----------------------------------------------------
 # GeoJSON country boundaries from Natural Earth (110 m resolution, public domain).
 # Downloaded once and cached locally so re-runs are instant.
@@ -173,6 +189,7 @@ def parse_to_dataframe(geojson: dict) -> pd.DataFrame:
         rows.append({
             "time":      dt,
             "magnitude": props["mag"],
+            "mag_type":  props.get("magType") or "unknown",
             "place":     props["place"],
             "longitude": coords[0],
             "latitude":  coords[1],
@@ -192,6 +209,32 @@ def parse_to_dataframe(geojson: dict) -> pd.DataFrame:
 
     print(f"    → DataFrame has {len(df)} rows × {len(df.columns)} columns")
     return df
+
+
+def filter_by_magnitude_type(df: pd.DataFrame, mag_types) -> pd.DataFrame:
+    """
+    Restrict to events whose magType is in mag_types (case-insensitive).
+
+    Used only for the Gutenberg-Richter fit, since mixing magnitude scales
+    (Mww, Mb, Ml, Md, ...) biases the b-value; the API has no server-side
+    parameter for this, so it's applied here after parsing. Pass
+    mag_types=None to skip filtering and keep every event.
+    """
+    if mag_types is None:
+        return df
+
+    allowed = {t.lower() for t in mag_types}
+    keep = df["mag_type"].str.lower().isin(allowed)
+    dropped = df.loc[~keep]
+
+    if len(dropped):
+        breakdown = ", ".join(
+            f"{mtype}={count}" for mtype, count in dropped["mag_type"].value_counts().items()
+        )
+        print(f"    → dropped {len(dropped)} event(s) outside MAG_TYPES "
+              f"{tuple(sorted(allowed))}: {breakdown}")
+
+    return df[keep].copy()
 
 
 # =============================================================================
@@ -341,63 +384,117 @@ def plot_world_map(df: pd.DataFrame, filename: str = "map_epicenters.png") -> No
 
 def plot_gutenberg_richter(
     df: pd.DataFrame, filename: str = "gutenberg_richter.png"
-) -> None:
+) -> dict:
     """
     Gutenberg-Richter (GR) frequency-magnitude plot.
 
     The GR relation states:   log10( N(≥M) ) = a − b·M
-    where N(≥M) is the number of earthquakes with magnitude ≥ M.
-    The 'b-value' (≈ 1 for most regions) describes how many small
-    quakes accompany each large one.  We estimate it by fitting a
-    straight line to the log10(cumulative count) vs. M curve.
+    where N(≥M) is the number of earthquakes with magnitude ≥ M.  Plots both
+    the cumulative distribution and the non-cumulative (per 0.1-wide bin)
+    counts, and fits the b-value from the cumulative curve using FIT_METHOD:
+
+      "mle"  Aki-Utsu maximum-likelihood estimator (default), computed
+             directly from the event magnitudes at or above the completeness
+             threshold Mc = MIN_MAGNITUDE — not from the binned counts —
+             with the Utsu (1965) correction for 0.1-wide binning:
+                 b_hat = log10(e) / (mean(M) - (Mc - dM/2))
+      "ols"  the original least-squares fit of log10(cumulative count)
+             vs. M, kept for comparison.
+
+    Either way, uncertainty is reported as the Shi & Bolt (1982) standard
+    error:
+        sigma_b = 2.30 * b^2 * sqrt( sum((M_i - mean(M))^2) / (n * (n - 1)) )
+
+    Returns a dict of fit statistics (method, mc, b, sigma_b, a, n).
     """
+    dM = 0.1                # magnitude binning interval
+    # NOTE: Mc reuses the query's magnitude floor, which assumes the MAG_TYPES
+    # subset is itself complete down to MIN_MAGNITUDE. It usually isn't — smaller
+    # events are less likely to have a moment-magnitude solution at all, so the
+    # filtered catalog thins out below its true completeness magnitude, which
+    # biases b downward. Watch for a rollover in the non-cumulative curve below
+    # the fit line: if you see one, raise Mc (or MIN_MAGNITUDE) until it's gone.
+    mc = MIN_MAGNITUDE      # completeness threshold
+
     # Build a range of magnitude bins from the data minimum to maximum
     m_min = math.floor(df["magnitude"].min() * 10) / 10   # round down to 0.1
     m_max = math.ceil(df["magnitude"].max()  * 10) / 10   # round up   to 0.1
-    magnitudes = np.arange(m_min, m_max + 0.1, 0.1)       # step = 0.1
+    magnitudes = np.arange(m_min, m_max + dM, dM)          # step = dM
 
-    # For each magnitude threshold M, count how many quakes have mag ≥ M
-    counts = np.array(
+    # Cumulative counts: for each magnitude threshold M, count quakes with mag ≥ M
+    cum_counts = np.array(
         [(df["magnitude"] >= m).sum() for m in magnitudes], dtype=float
     )
-
-    # Keep only bins with at least one earthquake so log10 doesn't blow up
-    valid = counts > 0
+    valid       = cum_counts > 0   # keep only bins with ≥1 quake so log10 doesn't blow up
     mag_valid   = magnitudes[valid]
-    log10_count = np.log10(counts[valid])
+    log10_cum   = np.log10(cum_counts[valid])
 
-    # Fit a degree-1 polynomial (straight line) to the log10 counts vs magnitude.
-    # np.polyfit returns [slope, intercept]; slope is −b in the GR relation.
-    coeffs = np.polyfit(mag_valid, log10_count, 1)
-    b_value = -coeffs[0]          # b-value is the negative of the slope
-    a_value =  coeffs[1]
+    # Non-cumulative counts: events falling in each 0.1-wide bin (not fitted —
+    # shown only to compare against the cumulative curve used for the fit)
+    bin_edges = np.append(magnitudes, magnitudes[-1] + dM)
+    incr_counts, _ = np.histogram(df["magnitude"], bins=bin_edges)
+    incr_valid = incr_counts > 0
+    mag_incr   = magnitudes[incr_valid]
+    log10_incr = np.log10(incr_counts[incr_valid])
+
+    # --- b-value fit -------------------------------------------------------
+    events_at_mc = df.loc[df["magnitude"] >= mc, "magnitude"]
+    n      = len(events_at_mc)
+    mean_m = events_at_mc.mean()
+
+    if FIT_METHOD == "mle":
+        b_value = math.log10(math.e) / (mean_m - (mc - dM / 2))
+        a_value = math.log10(n) + b_value * mc   # anchors the line at (mc, log10 n)
+    elif FIT_METHOD == "ols":
+        # np.polyfit returns [slope, intercept]; slope is −b in the GR relation.
+        coeffs  = np.polyfit(mag_valid, log10_cum, 1)
+        b_value = -coeffs[0]
+        a_value =  coeffs[1]
+    else:
+        raise ValueError(f"Unknown FIT_METHOD: {FIT_METHOD!r} (expected 'mle' or 'ols')")
+
+    # Shi & Bolt (1982) standard error of the b-value
+    sigma_b = 2.30 * b_value ** 2 * math.sqrt(
+        np.sum((events_at_mc - mean_m) ** 2) / (n * (n - 1))
+    )
 
     # Evaluate the fitted line at a smooth set of magnitude values
     fit_x = np.linspace(mag_valid.min(), mag_valid.max(), 200)
-    fit_y = np.polyval(coeffs, fit_x)
+    fit_y = a_value - b_value * fit_x
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    ax.scatter(mag_valid, log10_count, color="steelblue", s=30,
-               label="Observed cumulative count", zorder=3)
+    ax.scatter(mag_valid, log10_cum, color="steelblue", s=30, marker="o",
+               label="Cumulative N(≥M)", zorder=3)
+    ax.scatter(mag_incr, log10_incr, color="seagreen", s=30, marker="^",
+               label="Non-cumulative n(M), 0.1-wide bins", zorder=2)
 
     ax.plot(fit_x, fit_y, color="tomato", linewidth=2,
-            label=f"GR fit  (b = {b_value:.2f})")
+            label=f"{FIT_METHOD.upper()} fit  (b = {b_value:.2f} ± {sigma_b:.2f}, n = {n:,})")
 
     ax.set_xlabel("Magnitude (M)", fontsize=12)
-    ax.set_ylabel("log₁₀ N(≥M)", fontsize=12)
+    ax.set_ylabel("log₁₀ Count", fontsize=12)
     region_label = f" — {REGION_NAME}" if REGION_NAME else ""
     ax.set_title(
         f"Gutenberg-Richter Plot{region_label} — Last {DAYS_BACK} Days (M ≥ {MIN_MAGNITUDE})",
         fontsize=13,
     )
-    ax.legend(fontsize=11)
+    ax.legend(fontsize=10)
     ax.grid(True, linestyle="--", alpha=0.5)
 
     plt.tight_layout()
     plt.savefig(filename, dpi=150)
     plt.close(fig)
     print(f"    saved → {filename}")
+
+    return {
+        "method":  FIT_METHOD,
+        "mc":      mc,
+        "b":       b_value,
+        "sigma_b": sigma_b,
+        "a":       a_value,
+        "n":       n,
+    }
 
 
 def plot_depth_histogram(
@@ -875,19 +972,27 @@ def main():
     prefix = f"{REGION_NAME.lower().replace(' ', '_')}_" if REGION_NAME else ""
     print("[4/4] Generating plots …", flush=True)
 
-    map_file     = f"{prefix}map_epicenters.png"
-    gr_file      = f"{prefix}gutenberg_richter.png"
-    depth_file   = f"{prefix}depth_histogram.png"
-    geojson_file = f"{prefix}earthquakes.geojson"
+    map_file      = f"{prefix}map_epicenters.png"
+    gr_file       = f"{prefix}gutenberg_richter.png"
+    gr_stats_file = f"{prefix}gr_stats.json"
+    depth_file    = f"{prefix}depth_histogram.png"
+    geojson_file  = f"{prefix}earthquakes.geojson"
 
-    plot_world_map(df,         filename=map_file)
-    plot_gutenberg_richter(df, filename=gr_file)
-    plot_depth_histogram(df,   filename=depth_file)
+    plot_world_map(df, filename=map_file)
+
+    # GR fit uses only consistently-typed magnitudes (see MAG_TYPES); the map,
+    # depth histogram, aftershock series, and Benioff plot use every event.
+    gr_df = filter_by_magnitude_type(df, MAG_TYPES)
+    gr_stats = plot_gutenberg_richter(gr_df, filename=gr_file)
+    with open(gr_stats_file, "w") as f:
+        json.dump(gr_stats, f, indent=2)
+
+    plot_depth_histogram(df, filename=depth_file)
 
     # --- interactive GeoJSON ---
     save_geojson(df, filename=geojson_file)
 
-    for f in (map_file, gr_file, depth_file, geojson_file):
+    for f in (map_file, gr_file, gr_stats_file, depth_file, geojson_file):
         archive_snapshot(f, date_stamp)
 
     # --- aftershock time series (TODO 3) ---
@@ -974,3 +1079,12 @@ if __name__ == "__main__":
 #   the coregistration/unwrapping step is nontrivial), and a way to
 #   reconcile the interferogram's phase-derived location/extent with the
 #   point-source catalog values.
+
+# TODO 7 – Fit ETAS to the aftershock sequences instead of just plotting them
+#   Replace plot_aftershock_series()'s two-parameter Omori-Utsu curve fit
+#   with a real Epidemic-Type Aftershock Sequence (ETAS) model: maximize the
+#   point-process log-likelihood over (mu, K, alpha, c, p) given the observed
+#   event times and magnitudes, instead of log-log regression on a binned
+#   daily rate. A fitted ETAS model gives testable forecasts — e.g. expected
+#   event counts in a future time window — that can be scored against what
+#   the catalog actually recorded, which the current curve fit can't do.
