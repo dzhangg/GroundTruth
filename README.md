@@ -55,7 +55,6 @@ Projects events onto a configurable trench-to-backarc transect (`BENIOFF_TRANSEC
 ### Interactive map
 
 A Leaflet map reading `earthquakes.geojson`, colored by magnitude with a popup per event — live at https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson.
-/. 
 
 ## Running it
 
