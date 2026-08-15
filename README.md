@@ -1,51 +1,24 @@
- GroundTruth
+# GroundTruth
 
-Exploring global seismicity with Python. GroundTruth pulls the live USGS earthquake catalog and turns it into maps, charts, and an interactive web map that show where earthquakes happen, how deep they are, and how often they occur.
+## Question
 
-**Live map:** https://dzhangg.github.io/GroundTruth/
-**Repo:** https://github.com/dzhangg/GroundTruth
+Does earthquake frequency really fall off exponentially with magnitude — and if so, at what rate? The Gutenberg-Richter law predicts `log10(N(≥M)) = a − b·M`, where `N(≥M)` is the count of earthquakes at or above magnitude `M`. The slope, the **b-value**, describes how many small quakes accompany each large one (b ≈ 1.0 is typical; a lower b-value means large events make up a bigger share of total seismicity, as in locked subduction zones). This project pulls live global earthquake data and fits that relationship directly from observation.
 
-## What it does
+## Data source
 
-The script fetches every magnitude 4.5+ earthquake worldwide over a configurable time window from the USGS FDSN event API (no API key required), parses the GeoJSON response into a pandas DataFrame, and produces:
+The [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/fdsnws/event/1/) FDSN event API (no API key required). By default the script fetches every magnitude 4.5+ earthquake worldwide over the last 365 days as GeoJSON, which `earthquake_explorer.py` parses into a pandas DataFrame.
 
-- **Epicenter map** (`map_epicenters.png`): every quake plotted on a Natural Earth world map, colored by depth (plasma colormap, shallow = bright, deep = dark, capped at 700 km) and sized by magnitude. Shallow events trace spreading ridges; deep events mark subduction zones.
-- **Gutenberg-Richter plot** (`gutenberg_richter.png`): log10(cumulative count) versus magnitude, with a b-value estimated from a least-squares fit.
-- **Depth histogram** (`depth_histogram.png`): the depth distribution, with dashed lines at the 70 km (crustal / intermediate) and 300 km (intermediate / deep-focus) boundaries.
-- **b-value comparison** (`gr_comparison.png`): overlays GR fits for two configurable regions on one plot so you can compare their seismicity distributions. Defaults to Japan versus South America. Set `COMPARE_REGIONS = None` to skip it.
-- **Interactive web map** (`index.html`): a Leaflet map with OpenStreetMap tiles that reads `earthquakes.geojson`. Every marker is colored by magnitude and opens a popup with place, magnitude, depth, date, coordinates, and a direct link to the USGS event page. A legend sits in the bottom-right corner.
+## Method
 
-The exported `earthquakes.geojson` follows the GitHub Simple Style spec (`marker-color`, `marker-size`) and includes `title` and `description` HTML properties, so it also renders in GitHub's native `.geojson` preview, not just the Leaflet page.
+For each magnitude threshold `M` in the observed range (step 0.1), count the earthquakes with magnitude ≥ `M`, giving the cumulative distribution `N(≥M)`. Fit a straight line to `log10(N(≥M))` versus `M` by least squares (`np.polyfit`, degree 1); the fitted slope is `−b`, the intercept is `a`. See `plot_gutenberg_richter()` in [earthquake_explorer.py](earthquake_explorer.py).
 
-## Interactive map
+## Figure
 
-The live map is served via GitHub Pages at https://dzhangg.github.io/GroundTruth/.
+![Gutenberg-Richter plot](gutenberg_richter.png)
 
-To run it locally:
-
-```bash
-python -m http.server
-# then open http://localhost:8000
-```
-
-To deploy your own copy: push the repo, then go to Settings, Pages, Source, Deploy from branch, `main` / `(root)`.
-
-### Color key (web map, by magnitude)
-
-| Color    | Magnitude | Class    |
-| -------- | --------- | -------- |
-| Green    | M < 5.0   | Minor    |
-| Lime     | M 5.0-5.5 | Light    |
-| Yellow   | M 5.5-6.0 | Moderate |
-| Orange   | M 6.0-6.5 | Strong   |
-| Red      | M 6.5-7.0 | Major    |
-| Dark red | M >= 7.0  | Great    |
-
-Note: the web map colors markers by magnitude (palette above). The static epicenter PNG colors points by depth instead.
+Observed cumulative counts (blue) with the least-squares GR fit (red); the legend reports the fitted b-value for the current data window.
 
 ## Running it
-
-Requires Python 3 (any recent 3.x) and the libraries below.
 
 ```bash
 python -m venv venv
@@ -54,53 +27,7 @@ pip install requests pandas numpy matplotlib
 python earthquake_explorer.py
 ```
 
-Output files are written to the project folder. On the first run, Natural Earth country boundaries (~14 MB) are downloaded once and cached locally as `countries.geojson` so later runs are instant.
-
-When `REGION_NAME` is set, output filenames are prefixed with the region label (for example `california_map_epicenters.png`) so regional runs do not overwrite the global outputs.
-
-## Configuration
-
-All options live in the CONFIG block at the top of `earthquake_explorer.py`:
-
-| Variable            | Default                | Description                                                       |
-| ------------------- | ---------------------- | ----------------------------------------------------------------- |
-| `MIN_MAGNITUDE`     | `4.5`                  | Minimum magnitude to fetch                                        |
-| `DAYS_BACK`         | `365`                  | Days of history to pull                                           |
-| `REGION_NAME`       | `None`                 | Short label for a region filter (used in titles and filenames)    |
-| `MIN_LAT`/`MAX_LAT` | `None`                 | Latitude bounds for the optional bounding-box filter              |
-| `MIN_LON`/`MAX_LON` | `None`                 | Longitude bounds for the optional bounding-box filter             |
-| `COMPARE_REGIONS`   | Japan vs South America | Two regions for the b-value comparison plot; set `None` to skip   |
-
-### Example: zoom into California
-
-```python
-REGION_NAME = "California"
-MIN_LAT, MAX_LAT =  32.0,  42.0
-MIN_LON, MAX_LON = -124.5, -114.0
-```
-
-### Example: compare Japan versus Iceland
-
-```python
-COMPARE_REGIONS = [
-    {"name": "Japan",   "min_lat": 30, "max_lat": 46, "min_lon": 129, "max_lon": 146},
-    {"name": "Iceland", "min_lat": 63, "max_lat": 67, "min_lon": -25, "max_lon": -13},
-]
-```
-
-## Built with
-
-Python, requests, pandas, NumPy, matplotlib, Leaflet.js.
-
-Earthquake data from the [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/fdsnws/event/1/). Country boundaries from [Natural Earth](https://www.naturalearthdata.com/).
-
-## Roadmap
-
-- [x] Geographic bounding-box filter to zoom into a single plate boundary
-- [x] Compare b-values between two regions
-- [ ] Aftershock time series with an Omori-Utsu decay law fit, `n(t) = K / (c + t)^p`
-- [ ] Depth gradient across a subduction zone (Benioff zone)
-- [ ] Date-stamped output filenames for tracking change over time
+The script also produces an epicenter map, a depth histogram, a two-region b-value comparison, an aftershock time series, and an interactive Leaflet map (live at https://dzhangg.github.io/GroundTruth/). Configuration (magnitude cutoff, time window, region filter) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
 
 ## License
 
