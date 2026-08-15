@@ -14,6 +14,7 @@ Run:
 import json
 import math
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
 
 import matplotlib
@@ -69,6 +70,20 @@ COMPARE_REGIONS = [
     {"name": "Japan",         "min_lat":  30, "max_lat":  46, "min_lon": 129, "max_lon": 146},
     {"name": "South America", "min_lat": -55, "max_lat":  15, "min_lon": -82, "max_lon": -34},
 ]
+
+# --- Benioff zone transect (TODO 4) -------------------------------------------
+# A trench-to-backarc line used to slice through a subduction zone and plot
+# depth vs. distance-along, tracing the dipping Wadati-Benioff zone.
+# "start" should sit on the trench (shallow) side, "end" on the backarc
+# (deeper) side.  half_width_km is the corridor half-width around the line;
+# widen it if too few events fall within it.
+# Set BENIOFF_TRANSECT = None to skip this plot.
+BENIOFF_TRANSECT = {
+    "name":          "NE Japan (Tohoku)",
+    "start":         (39.5, 144.0),   # trench side
+    "end":           (39.0, 138.0),   # backarc side
+    "half_width_km": 100.0,
+}
 
 
 # =============================================================================
@@ -430,6 +445,103 @@ def plot_depth_histogram(
     print(f"    saved → {filename}")
 
 
+def _transect_project(lat, lon, start: tuple, end: tuple):
+    """
+    Project point(s) onto the trench-to-backarc line defined by start/end
+    (each a (lat, lon) tuple), using a flat-Earth (equirectangular)
+    approximation referenced to `start` — accurate enough for the few-hundred
+    km scale of a subduction-zone transect.
+
+    lat/lon may be scalars or numpy arrays.  Returns (along_km, perp_km, length_km):
+      along_km  distance from `start`, measured along the transect direction
+      perp_km   signed perpendicular distance from the transect line
+      length_km total length of the transect (start to end)
+    """
+    lat0, lon0 = start
+    lat1, lon1 = end
+    km_per_deg_lat = 111.32
+    km_per_deg_lon = 111.32 * math.cos(math.radians(lat0))
+
+    # Transect direction as a unit vector in local km-space
+    ex = (lon1 - lon0) * km_per_deg_lon
+    ey = (lat1 - lat0) * km_per_deg_lat
+    length = math.hypot(ex, ey)
+    ux, uy = ex / length, ey / length
+
+    # Each point's position in the same local km-space
+    px = (np.asarray(lon) - lon0) * km_per_deg_lon
+    py = (np.asarray(lat) - lat0) * km_per_deg_lat
+
+    along = px * ux + py * uy               # dot product with the unit vector
+    perp  = px * uy - py * ux               # cross product = signed offset from the line
+    return along, perp, length
+
+
+def plot_benioff_zone(
+    df: pd.DataFrame, transect: dict, filename: str = "benioff_zone.png"
+) -> None:
+    """
+    Depth-gradient plot across a subduction zone (Wadati-Benioff zone).
+
+    Projects every earthquake onto a trench-to-backarc transect (see the
+    BENIOFF_TRANSECT config) and plots along-track distance vs. depth for
+    events within `half_width_km` of the line.  A straight-line fit to that
+    band estimates the slab's dip angle.
+    """
+    along, perp, length = _transect_project(
+        df["latitude"].values, df["longitude"].values,
+        transect["start"], transect["end"],
+    )
+    corridor = df.assign(along_km=along, perp_km=perp)
+    corridor = corridor[
+        (corridor["perp_km"].abs() <= transect["half_width_km"]) &
+        (corridor["along_km"] >= 0) &
+        (corridor["along_km"] <= length)
+    ]
+
+    name = transect.get("name", "")
+    if len(corridor) < 5:
+        print(f"    Only {len(corridor)} event(s) within {transect['half_width_km']:.0f} km "
+              f"of the {name or 'transect'} line — skipping Benioff zone plot")
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+
+    sc = ax.scatter(
+        corridor["along_km"], corridor["depth_km"],
+        c=corridor["magnitude"], cmap="viridis",
+        s=(np.clip(corridor["magnitude"], 4, 9) ** 2) * 1.5,
+        alpha=0.75, linewidths=0,
+    )
+    cbar = plt.colorbar(sc, ax=ax, fraction=0.025, pad=0.02)
+    cbar.set_label("Magnitude", fontsize=11)
+
+    # Fit a line to depth vs. along-track distance; slope's arctangent is the dip.
+    coeffs = np.polyfit(corridor["along_km"], corridor["depth_km"], 1)
+    dip_deg = math.degrees(math.atan(coeffs[0]))
+    fit_x = np.linspace(corridor["along_km"].min(), corridor["along_km"].max(), 200)
+    fit_y = np.polyval(coeffs, fit_x)
+    ax.plot(fit_x, fit_y, color="tomato", linewidth=2,
+            label=f"Linear fit  (dip ≈ {dip_deg:.0f}°)")
+
+    ax.invert_yaxis()  # depth increases downward on the page
+    ax.set_xlabel("Distance from trench-side transect start (km)", fontsize=12)
+    ax.set_ylabel("Depth (km)", fontsize=12)
+    title_region = f" — {name}" if name else ""
+    ax.set_title(
+        f"Wadati-Benioff Zone Depth Gradient{title_region}\n"
+        f"({len(corridor):,} events within {transect['half_width_km']:.0f} km of transect)",
+        fontsize=13,
+    )
+    ax.legend(fontsize=11)
+    ax.grid(True, linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=150)
+    plt.close(fig)
+    print(f"    saved → {filename}")
+
+
 def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in km between two lat/lon points."""
     R = 6371.0
@@ -715,10 +827,36 @@ def save_geojson(df: pd.DataFrame, filename: str = "earthquakes.geojson") -> Non
 
 
 # =============================================================================
+# SECTION 6 – DATE-STAMPED SNAPSHOTS (TODO 5)
+# =============================================================================
+
+SNAPSHOT_DIR = "snapshots"   # dated copies land here; *.png/*.geojson stay gitignored
+
+
+def archive_snapshot(filename: str, date_stamp: str) -> None:
+    """
+    Copy a freshly-written output file into SNAPSHOT_DIR with the run's UTC
+    date stamped onto its name (e.g. map_epicenters_2026-08-15.png).
+
+    The canonical, undated filenames (used by index.html and the README) are
+    left untouched so existing links keep working; this just builds up a
+    dated history alongside them for tracking change over time.
+    """
+    if not os.path.exists(filename):
+        return
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(filename))
+    dated_name = f"{stem}_{date_stamp}{ext}"
+    shutil.copy2(filename, os.path.join(SNAPSHOT_DIR, dated_name))
+
+
+# =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================
 
 def main():
+    date_stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     # --- fetch ---
     geojson = fetch_earthquakes(
         MIN_MAGNITUDE, DAYS_BACK,
@@ -736,15 +874,32 @@ def main():
     # Build a filename prefix so region runs don't overwrite the global PNGs.
     prefix = f"{REGION_NAME.lower().replace(' ', '_')}_" if REGION_NAME else ""
     print("[4/4] Generating plots …", flush=True)
-    plot_world_map(df,            filename=f"{prefix}map_epicenters.png")
-    plot_gutenberg_richter(df,    filename=f"{prefix}gutenberg_richter.png")
-    plot_depth_histogram(df,      filename=f"{prefix}depth_histogram.png")
+
+    map_file     = f"{prefix}map_epicenters.png"
+    gr_file      = f"{prefix}gutenberg_richter.png"
+    depth_file   = f"{prefix}depth_histogram.png"
+    geojson_file = f"{prefix}earthquakes.geojson"
+
+    plot_world_map(df,         filename=map_file)
+    plot_gutenberg_richter(df, filename=gr_file)
+    plot_depth_histogram(df,   filename=depth_file)
 
     # --- interactive GeoJSON ---
-    save_geojson(df, filename=f"{prefix}earthquakes.geojson")
+    save_geojson(df, filename=geojson_file)
+
+    for f in (map_file, gr_file, depth_file, geojson_file):
+        archive_snapshot(f, date_stamp)
 
     # --- aftershock time series (TODO 3) ---
-    plot_aftershock_series(df, filename=f"{prefix}aftershock_series.png")
+    aftershock_file = f"{prefix}aftershock_series.png"
+    plot_aftershock_series(df, filename=aftershock_file)
+    archive_snapshot(aftershock_file, date_stamp)
+
+    # --- Benioff zone depth gradient (TODO 4) ---
+    if BENIOFF_TRANSECT is not None:
+        benioff_file = f"{prefix}benioff_zone.png"
+        plot_benioff_zone(df, BENIOFF_TRANSECT, filename=benioff_file)
+        archive_snapshot(benioff_file, date_stamp)
 
     # --- b-value comparison (TODO 2) ---
     if COMPARE_REGIONS is not None:
@@ -765,11 +920,13 @@ def main():
         )
         df_b = parse_to_dataframe(geo_b)
 
+        gr_comparison_file = f"{prefix}gr_comparison.png"
         plot_gr_comparison(
             df_a, r_a["name"],
             df_b, r_b["name"],
-            filename=f"{prefix}gr_comparison.png",
+            filename=gr_comparison_file,
         )
+        archive_snapshot(gr_comparison_file, date_stamp)
 
     print("\nDone!  Push earthquakes.geojson to GitHub to view the interactive map.")
 
@@ -794,3 +951,14 @@ if __name__ == "__main__":
 #   Finds the largest event, collects aftershocks within 200 km / 90 days,
 #   plots magnitude vs. time, and overlays an Omori–Utsu decay fit on the
 #   daily rate — saved to aftershock_series.png.
+
+# DONE 4 – Depth gradient across a subduction zone (Benioff zone)
+#   Set BENIOFF_TRANSECT in the CONFIG block to a trench-to-backarc line
+#   (start/end lat-lon + corridor half-width).  Projects events onto the
+#   line and plots along-track distance vs. depth, fitting a slab dip angle
+#   — saved to benioff_zone.png.  Set BENIOFF_TRANSECT = None to skip it.
+
+# DONE 5 – Date-stamped output filenames for tracking change over time
+#   Every run copies its outputs into snapshots/ with the UTC run date
+#   stamped onto the filename (e.g. snapshots/gutenberg_richter_2026-08-15.png),
+#   while the canonical undated files stay in place for index.html/README.
