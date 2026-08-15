@@ -27,7 +27,7 @@ pip install requests pandas numpy matplotlib
 python earthquake_explorer.py
 ```
 
-The script also produces an epicenter map, a depth histogram, a two-region b-value comparison, an aftershock time series, and an interactive Leaflet map (live at https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson). Configuration (magnitude cutoff, time window, region filter) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
+The script also produces an epicenter map, a depth histogram, a two-region b-value comparison, an aftershock time series, a subduction-zone depth-gradient (Benioff zone) plot, and an interactive Leaflet map (live at https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson). Each run also archives a dated copy of its outputs under `snapshots/` for tracking change over time. Configuration (magnitude cutoff, time window, region filter, transect) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
 
 ## License
 
