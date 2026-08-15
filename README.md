@@ -18,6 +18,44 @@ For each magnitude threshold `M` in the observed range (step 0.1), count the ear
 
 Observed cumulative counts (blue) with the least-squares GR fit (red); the legend reports the fitted b-value for the current data window.
 
+## Other analyses
+
+The same live dataset feeds a few other views. Each is one function in `earthquake_explorer.py` and one output file; examples below are from a live run.
+
+### Epicenter map
+
+![Epicenter map](map_epicenters.png)
+
+Every fetched event plotted on a world map, colored by depth (bright = shallow, dark = deep) and sized by magnitude. Shallow events trace spreading ridges; the darker clusters mark subduction zones. See `plot_world_map()`.
+
+### Depth histogram
+
+![Depth histogram](depth_histogram.png)
+
+Distribution of focal depths, with dashed lines at the 70 km (crustal/intermediate) and 300 km (intermediate/deep) boundaries. Most seismicity is shallow; the small bump past 500 km is deep-focus subduction activity. See `plot_depth_histogram()`.
+
+### b-value comparison
+
+![Gutenberg-Richter comparison](gr_comparison.png)
+
+Overlays the GR fit for two regions (Japan vs. South America by default) to compare seismicity distributions — set by `COMPARE_REGIONS`. See `plot_gr_comparison()`.
+
+### Aftershock sequence
+
+![Aftershock series](aftershock_series.png)
+
+Finds the largest event in the current dataset, collects aftershocks within 200 km / 90 days, and fits an Omori–Utsu decay law `n(t) = K / (c + t)^p` to the daily rate. See `plot_aftershock_series()`.
+
+### Benioff zone depth gradient
+
+![Benioff zone](benioff_zone.png)
+
+Projects events onto a configurable trench-to-backarc transect (`BENIOFF_TRANSECT`, Tohoku/NE Japan by default) and plots depth vs. along-track distance; the linear fit's slope gives the slab's dip angle. See `plot_benioff_zone()`.
+
+### Interactive map
+
+A Leaflet map reading `earthquakes.geojson`, colored by magnitude with a popup per event — live at https://dzhangg.github.io/GroundTruth/. The same file also renders on its own via GitHub's native GeoJSON viewer: https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson.
+
 ## Running it
 
 ```bash
@@ -27,7 +65,7 @@ pip install requests pandas numpy matplotlib
 python earthquake_explorer.py
 ```
 
-The script also produces an epicenter map, a depth histogram, a two-region b-value comparison, an aftershock time series, a subduction-zone depth-gradient (Benioff zone) plot, and an interactive Leaflet map (live at https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson). Each run also archives a dated copy of its outputs under `snapshots/` for tracking change over time. Configuration (magnitude cutoff, time window, region filter, transect) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
+Every run also archives a dated copy of its outputs under `snapshots/` for tracking change over time. Configuration (magnitude cutoff, time window, region filter, comparison regions, transect) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
 
 ## License
 
