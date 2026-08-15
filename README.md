@@ -67,6 +67,10 @@ python earthquake_explorer.py
 
 Every run also archives a dated copy of its outputs under `snapshots/` for tracking change over time. Configuration (magnitude cutoff, time window, region filter, comparison regions, transect) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
 
+## Roadmap
+
+- [ ] Pair catalog events with InSAR coseismic interferograms: for M6.5+ events, pull pre/post-event Sentinel-1 SAR pairs from the [Alaska Satellite Facility](https://asf.alaska.edu/) archive, generate a coseismic interferogram, and compare the deformation fringe pattern's location and inferred fault geometry against the catalog epicenter and depth.
+
 ## License
 
 Released under the [MIT License](LICENSE).

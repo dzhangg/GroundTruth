@@ -962,3 +962,15 @@ if __name__ == "__main__":
 #   Every run copies its outputs into snapshots/ with the UTC run date
 #   stamped onto the filename (e.g. snapshots/gutenberg_richter_2026-08-15.png),
 #   while the canonical undated files stay in place for index.html/README.
+
+# TODO 6 – Pair catalog events with InSAR coseismic interferograms
+#   For M6.5+ events, pull Sentinel-1 SAR pairs (pre/post-event) from the
+#   Alaska Satellite Facility (ASF) archive, generate a coseismic
+#   interferogram, and compare the deformation fringe pattern's location
+#   and inferred fault geometry against the catalog epicenter and depth.
+#   Harder than the plots above: needs an ASF/Copernicus data search
+#   (asf_search or the ASF Vertex API), an InSAR processing step (e.g.
+#   ISCE2, MintPy, or a hosted service — raw Sentinel-1 SLCs are large and
+#   the coregistration/unwrapping step is nontrivial), and a way to
+#   reconcile the interferogram's phase-derived location/extent with the
+#   point-source catalog values.
