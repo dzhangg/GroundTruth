@@ -1,5 +1,7 @@
 # GroundTruth
 
+**Live map:** https://dzhangg.github.io/GroundTruth/
+
 ## Question
 
 Does earthquake frequency fall off exponentially with magnitude? If so, at what rate? The Gutenberg-Richter law predicts `log10(N(≥M)) = a − b·M`, where `N(≥M)` is the count of earthquakes at or above magnitude `M`. The slope, the **b-value**, describes how many small quakes accompany each large one (b ≈ 1.0 is typical; a lower b-value means large events make up a bigger share of total seismicity, as in locked subduction zones). This project pulls live global earthquake data and fits that relationship directly from observation.
@@ -10,7 +12,7 @@ The [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/fdsnws/event/1
 
 ## Method
 
-Only events from the moment-magnitude family (`MAG_TYPES`, e.g. Mww/Mwc/Mwb/Mwr/Mw) are used for the fit — mixing magnitude scales biases a single b-value, and the FDSN catalog reports several. The b-value is then estimated by the Aki-Utsu maximum-likelihood estimator (`FIT_METHOD = "mle"`, the default), computed directly from event magnitudes at or above the completeness threshold `Mc` (not from binned counts), with the Utsu (1965) correction for 0.1-wide binning:
+Only events from the moment-magnitude family (`MAG_TYPES`, e.g. Mww/Mwc/Mwb/Mwr/Mw) are used for the fit: mixing magnitude scales biases a single b-value, and the FDSN catalog reports several. The b-value is then estimated by the Aki-Utsu maximum-likelihood estimator (`FIT_METHOD = "mle"`, the default), computed directly from event magnitudes at or above the completeness threshold `Mc` (not from binned counts), with the Utsu (1965) correction for 0.1-wide binning:
 
 `b_hat = log10(e) / (mean(M) - (Mc - dM/2))`
 
@@ -42,7 +44,7 @@ Distribution of focal depths, with dashed lines at the 70 km (crustal/intermedia
 
 ![Gutenberg-Richter comparison](gr_comparison.png)
 
-Overlays the GR fit for two regions (Japan vs. South America by default) to compare seismicity distributions — set by `COMPARE_REGIONS`. See `plot_gr_comparison()`.
+Overlays the GR fit for two regions (Japan vs. South America by default, configured via `COMPARE_REGIONS`) to compare seismicity distributions. See `plot_gr_comparison()`.
 
 ### Aftershock sequence
 
@@ -58,7 +60,7 @@ Projects events onto a configurable trench-to-backarc transect (`BENIOFF_TRANSEC
 
 ### Interactive map
 
-`index.html` renders the exported `earthquakes.geojson` as a Leaflet map, colored by magnitude with a popup per event. Run it locally (see below) or deploy `index.html` via GitHub Pages to host it live. The raw `earthquakes.geojson` also renders on its own through GitHub's native GeoJSON viewer: https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson.
+`index.html` renders the exported `earthquakes.geojson` as a Leaflet map, colored by magnitude with a popup per event, live at https://dzhangg.github.io/GroundTruth/. Run it locally instead with `python -m http.server` (see below). The raw `earthquakes.geojson` also renders on its own through GitHub's native GeoJSON viewer: https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson.
 
 ## Running it
 
@@ -70,6 +72,13 @@ python earthquake_explorer.py
 ```
 
 Every run also archives a dated copy of its outputs under `snapshots/` for tracking change over time. Configuration (magnitude cutoff, time window, region filter, comparison regions, transect) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
+
+To view the interactive map locally instead of the live GitHub Pages deployment:
+
+```bash
+python -m http.server
+# then open http://localhost:8000
+```
 
 ## Roadmap
 
