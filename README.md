@@ -2,7 +2,7 @@
 
 ## Question
 
-Does earthquake frequency really fall off exponentially with magnitude — and if so, at what rate? The Gutenberg-Richter law predicts `log10(N(≥M)) = a − b·M`, where `N(≥M)` is the count of earthquakes at or above magnitude `M`. The slope, the **b-value**, describes how many small quakes accompany each large one (b ≈ 1.0 is typical; a lower b-value means large events make up a bigger share of total seismicity, as in locked subduction zones). This project pulls live global earthquake data and fits that relationship directly from observation.
+Does earthquake frequency fall off exponentially with magnitude? If so, at what rate? The Gutenberg-Richter law predicts `log10(N(≥M)) = a − b·M`, where `N(≥M)` is the count of earthquakes at or above magnitude `M`. The slope, the **b-value**, describes how many small quakes accompany each large one (b ≈ 1.0 is typical; a lower b-value means large events make up a bigger share of total seismicity, as in locked subduction zones). This project pulls live global earthquake data and fits that relationship directly from observation.
 
 ## Data source
 
@@ -27,7 +27,7 @@ pip install requests pandas numpy matplotlib
 python earthquake_explorer.py
 ```
 
-The script also produces an epicenter map, a depth histogram, a two-region b-value comparison, an aftershock time series, and an interactive Leaflet map (live at https://dzhangg.github.io/GroundTruth/). Configuration (magnitude cutoff, time window, region filter) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
+The script also produces an epicenter map, a depth histogram, a two-region b-value comparison, an aftershock time series, and an interactive Leaflet map (live at https://github.com/dzhangg/GroundTruth/blob/main/earthquakes.geojson). Configuration (magnitude cutoff, time window, region filter) lives in the `CONFIG` block at the top of `earthquake_explorer.py`.
 
 ## License
 
