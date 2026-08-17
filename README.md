@@ -4,7 +4,21 @@
 
 ## Question
 
-Does earthquake frequency fall off exponentially with magnitude? If so, at what rate? The Gutenberg-Richter law predicts `log10(N(≥M)) = a − b·M`, where `N(≥M)` is the count of earthquakes at or above magnitude `M`. The slope, the **b-value**, describes how many small quakes accompany each large one (b ≈ 1.0 is typical; a lower b-value means large events make up a bigger share of total seismicity, as in locked subduction zones). This project pulls live global earthquake data and fits that relationship directly from observation.
+**Large earthquakes are rare. How rare, exactly?**
+
+Count every quake above magnitude 4 somewhere, then above 5, then above 6.
+The counts fall off fast, and they fall in a strikingly regular way: each
+whole step up in magnitude cuts the number of events by roughly a factor of
+ten. That regularity is the Gutenberg-Richter law,
+
+$$\log_{10} N(\ge M) = a - bM$$
+
+where $N(\ge M)$ is the count of quakes at or above magnitude $M$. The
+intercept $a$ says how seismically busy a region is. The slope $b$ says how
+the seismicity is split between small and large events. A $b$ near 1.0 is
+typical worldwide; a lower $b$ means the big ones carry more of the total,
+which is what locked subduction zones tend to show. This project pulls live
+global catalog data and fits that slope directly from observation.
 
 ## Data source
 
